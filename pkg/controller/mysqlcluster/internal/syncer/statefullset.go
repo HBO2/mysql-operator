@@ -122,7 +122,7 @@ func (s *sfsSyncer) ensureTemplate(in core.PodTemplateSpec) core.PodTemplateSpec
 const (
 	containerInitName      = "init-mysql"
 	containerCloneName     = "clone-mysql"
-	containerSidecarName   = "mysql-operator-sidecar"
+	containerSidecarName   = "sidecar"
 	containerMysqlName     = "mysql"
 	containerExporterName  = "metrics-exporter"
 	containerHeartBeatName = "pt-heartbeat"
