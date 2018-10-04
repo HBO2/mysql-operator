@@ -24,8 +24,10 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/golang/glog"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 )
+
+var log = logf.Log.WithName("orchestrator.util")
 
 type orcError struct {
 	HTTPStatus int
@@ -51,7 +53,7 @@ func NewOrcError(resp *http.Response) error {
 	}
 
 	if err = json.Unmarshal(body, &rsp); err != nil {
-		glog.V(3).Infof("Unmarshal data is: %s", string(body))
+		log.V(3).Info("unmarshal data error", "body", body)
 		rsp.Message = fmt.Sprintf("at error, json unmarshal error: %s", err)
 		return rsp
 	}
@@ -69,7 +71,7 @@ func NewOrcErrorMsg(msg string) error {
 
 func (o *orchestrator) makeGetRequest(path string, out interface{}) error {
 	uri := fmt.Sprintf("%s/%s", o.connectURI, path)
-	glog.V(2).Infof("Orc request on: %s", uri)
+	log.V(2).Info("orchestrator request info", "uri", uri, "outobj", out)
 
 	resp, err := http.Get(uri)
 	if err != nil {
@@ -116,7 +118,7 @@ func unmarshalJSON(in io.Reader, obj interface{}) error {
 	}
 
 	if err = json.Unmarshal(body, obj); err != nil {
-		glog.V(4).Infof("Unmarshal data is: %s", string(body))
+		log.V(4).Info("unmarshal error", "body", body)
 		return err
 	}
 
