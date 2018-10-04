@@ -42,8 +42,9 @@ func newFinalizerSyncer(cluster *api.MysqlCluster, orcClient orc.Interface) sync
 				err       error
 			)
 			// get status from orchestrator
-			if instances, err = orcClient.Cluster(wrapcluster.NewMysqlClusterWrapper(cluster).GetClusterAlias()); err != nil {
-				log.Error(err, "can't get instances from orchestrator", "cluster", cluster)
+			alias := wrapcluster.NewMysqlClusterWrapper(cluster).GetClusterAlias()
+			if instances, err = orcClient.Cluster(alias); err != nil {
+				log.Error(err, "can't get instances from orchestrator", "alias", alias)
 			}
 
 			if len(instances) == 0 {
