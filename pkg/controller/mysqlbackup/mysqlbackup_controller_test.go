@@ -18,65 +18,112 @@ limitations under the License.
 package mysqlbackup
 
 import (
-	"testing"
+	"fmt"
+	"math/rand"
 	"time"
 
-	"github.com/onsi/gomega"
-	mysqlv1alpha1 "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+
 	"golang.org/x/net/context"
-	appsv1 "k8s.io/api/apps/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	api "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
 )
 
-var c client.Client
+const timeout = time.Second * 2
 
-var expectedRequest = reconcile.Request{NamespacedName: types.NamespacedName{Name: "foo", Namespace: "default"}}
-var depKey = types.NamespacedName{Name: "foo-deployment", Namespace: "default"}
+var _ = Describe("MysqlBackup controller", func() {
+	var (
+		// channel for incoming reconcile requests
+		requests chan reconcile.Request
+		// stop channel for controller manager
+		stop chan struct{}
+		// controller k8s client
+		c client.Client
+	)
 
-const timeout = time.Second * 5
+	BeforeEach(func() {
+		var recFn reconcile.Reconciler
 
-func TestReconcile(t *testing.T) {
-	g := gomega.NewGomegaWithT(t)
-	instance := &mysqlv1alpha1.MysqlBackup{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}}
+		mgr, err := manager.New(cfg, manager.Options{})
+		Expect(err).NotTo(HaveOccurred())
+		c = mgr.GetClient()
 
-	// Setup the Manager and Controller.  Wrap the Controller Reconcile function so it writes each request to a
-	// channel when it is finished.
-	mgr, err := manager.New(cfg, manager.Options{})
-	g.Expect(err).NotTo(gomega.HaveOccurred())
-	c = mgr.GetClient()
+		recFn, requests = SetupTestReconcile(newReconciler(mgr))
+		Expect(add(mgr, recFn)).To(Succeed())
 
-	recFn, requests := SetupTestReconcile(newReconciler(mgr))
-	g.Expect(add(mgr, recFn)).NotTo(gomega.HaveOccurred())
-	defer close(StartTestManager(mgr, g))
+		stop = StartTestManager(mgr)
+	})
 
-	// Create the MysqlBackup object and expect the Reconcile and Deployment to be created
-	err = c.Create(context.TODO(), instance)
-	// The instance object may not be a valid object because it might be missing some required fields.
-	// Please modify the instance object by adding required fields and then remove the following if statement.
-	if apierrors.IsInvalid(err) {
-		t.Logf("failed to create object, got an invalid object error: %v", err)
-		return
-	}
-	g.Expect(err).NotTo(gomega.HaveOccurred())
-	defer c.Delete(context.TODO(), instance)
-	g.Eventually(requests, timeout).Should(gomega.Receive(gomega.Equal(expectedRequest)))
+	AfterEach(func() {
+		close(stop)
+	})
 
-	deploy := &appsv1.Deployment{}
-	g.Eventually(func() error { return c.Get(context.TODO(), depKey, deploy) }, timeout).
-		Should(gomega.Succeed())
+	Describe("when creating a new mysql cluster", func() {
+		var (
+			expectedRequest reconcile.Request
+			cluster         *api.MysqlCluster
+			secret          *corev1.Secret
+		)
 
-	// Delete the Deployment and expect Reconcile to be called for Deployment deletion
-	g.Expect(c.Delete(context.TODO(), deploy)).NotTo(gomega.HaveOccurred())
-	g.Eventually(requests, timeout).Should(gomega.Receive(gomega.Equal(expectedRequest)))
-	g.Eventually(func() error { return c.Get(context.TODO(), depKey, deploy) }, timeout).
-		Should(gomega.Succeed())
+		BeforeEach(func() {
+			name := fmt.Sprintf("cluster-%d", rand.Int31())
+			ns := "default"
 
-	// Manually delete Deployment since GC isn't enabled in the test control plane
-	g.Expect(c.Delete(context.TODO(), deploy)).To(gomega.Succeed())
+			expectedRequest = reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: name, Namespace: ns},
+			}
 
-}
+			secret = &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "the-secret", Namespace: ns},
+				StringData: map[string]string{
+					"ROOT_PASSWORD": "this-is-secret",
+				},
+			}
+
+			cluster = &api.MysqlCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Spec: api.MysqlClusterSpec{
+					Replicas:   2,
+					SecretName: secret.Name,
+				},
+			}
+
+			Expect(c.Create(context.TODO(), secret)).To(Succeed())
+			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
+
+			// Initial reconciliation
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+			// Reconcile triggered by components being created and status being
+			// updated
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// some extra reconcile requests may appear
+		drain:
+			for {
+				select {
+				case <-requests:
+					continue
+				case <-time.After(100 * time.Millisecond):
+					break drain
+				}
+			}
+
+			// We need to make sure that the controller does not create infinite
+			// loops
+			Consistently(requests).ShouldNot(Receive(Equal(expectedRequest)))
+		})
+
+		AfterEach(func() {
+			c.Delete(context.TODO(), secret)
+			c.Delete(context.TODO(), cluster)
+		})
+
+	})
+})

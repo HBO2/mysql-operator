@@ -31,7 +31,7 @@ type MysqlBackupSpec struct {
 	// BackupURI a fully specified bucket URI where to put backup.
 	// Default is used the one specified in cluster.
 	// optional
-	BackupURI string `json:"backupURI,omitempty"`
+	BackupURI string `json:"backupUri,omitempty"`
 	// BackupSecretName the name of secrets that contains the credentials to
 	// access the bucket. Default is used the secret specified in cluster.
 	// optinal
@@ -69,7 +69,7 @@ type MysqlBackupStatus struct {
 	Completed bool `json:"completed,omitempty"`
 
 	// BackupURI represent the fully uri to the backup location
-	BackupURI string `json:"backupURI,omitempty"`
+	BackupURI string `json:"backupUri,omitempty"`
 
 	// Conditions represents the backup resource conditions list.
 	Conditions []BackupCondition `json:"conditions,omitempty"`
