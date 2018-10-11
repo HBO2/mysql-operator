@@ -99,7 +99,7 @@ type ReconcileMysqlBackup struct {
 // Reconcile reads that state of the cluster for a MysqlBackup object and makes changes based on the state read
 // and what is in the MysqlBackup.Spec
 // Automatically generate RBAC rules to allow the Controller to read and write Deployments
-// +kubebuilder:rbac:groups=batch,resources=job,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=mysql.presslabs.org,resources=mysqlbackups,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileMysqlBackup) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	// Fetch the MysqlBackup instance
@@ -130,6 +130,12 @@ func (r *ReconcileMysqlBackup) Reconcile(request reconcile.Request) (reconcile.R
 	if err = r.Get(context.TODO(), clusterKey, cluster); err != nil {
 		return reconcile.Result{}, fmt.Errorf("cluster not found: %s", err)
 	}
+
+	defer func() {
+		if cErr := r.Status().Update(context.TODO(), backup); cErr != nil {
+			log.Error(cErr, "failed to update status for backup", "backup", backup)
+		}
+	}()
 
 	jobSyncer := backupSyncer.NewJobSyncer(backup, cluster, r.opt)
 	err = syncer.Sync(context.TODO(), jobSyncer, r.Client, r.scheme, r.recorder)

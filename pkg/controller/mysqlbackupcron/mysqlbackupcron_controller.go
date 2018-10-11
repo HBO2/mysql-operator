@@ -156,7 +156,9 @@ func (r *ReconcileMysqlBackup) registerCluster(cluster *mysqlv1alpha1.MysqlClust
 				log.Info("update cluster scheduler", "cluster",
 					cluster.Name, "scheduler", cluster.Spec.BackupSchedule)
 
-				r.cron.Remove(cluster.Name)
+				if err := r.cron.Remove(cluster.Name); err != nil {
+					return err
+				}
 				break
 			}
 
@@ -168,7 +170,9 @@ func (r *ReconcileMysqlBackup) registerCluster(cluster *mysqlv1alpha1.MysqlClust
 				}
 				log.Info("update cluster backup limit", "cluster",
 					cluster.Name, "limit_val", newValFmt)
-				r.cron.Remove(cluster.Name)
+				if err := r.cron.Remove(cluster.Name); err != nil {
+					return err
+				}
 				break
 
 			}

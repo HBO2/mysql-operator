@@ -22,29 +22,13 @@ import (
 
 	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 
 	api "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
 )
 
-// MysqlBackup is a type wrapper over MysqlBackup that contains the Business
-// logic
-type MysqlBackup struct {
-	*api.MysqlBackup
-}
-
-// New returns a wraper object over MysqlBackup
-func New(backup *api.MysqlBackup) *MysqlBackup {
-	return &MysqlBackup{
-		MysqlBackup: backup,
-	}
-}
-
-var log = logf.Log.WithName("update-status")
-
 // UpdateStatusCondition sets the condition to a status.
 // for example Ready condition to True, or False
-func (c *MysqlBackup) UpdateStatusCondition(condType api.BackupConditionType,
+func (c *Wrapper) UpdateStatusCondition(condType api.BackupConditionType,
 	status core.ConditionStatus, reason, msg string) {
 	newCondition := api.BackupCondition{
 		Type:    condType,
@@ -83,7 +67,7 @@ func (c *MysqlBackup) UpdateStatusCondition(condType api.BackupConditionType,
 	}
 }
 
-func (c *MysqlBackup) condExists(ty api.BackupConditionType) (int, bool) {
+func (c *Wrapper) condExists(ty api.BackupConditionType) (int, bool) {
 	for i, cond := range c.Status.Conditions {
 		if cond.Type == ty {
 			return i, true

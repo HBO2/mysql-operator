@@ -26,14 +26,18 @@ import (
 	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 
 	api "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
 	backupwrap "github.com/presslabs/mysql-operator/pkg/controller/internal/mysqlbackup"
+	clusterwrap "github.com/presslabs/mysql-operator/pkg/controller/internal/mysqlcluster"
 	"github.com/presslabs/mysql-operator/pkg/options"
 )
 
+var log = logf.Log.WithName("mysqlbackup.syncer.job")
+
 type jobSyncer struct {
-	backup  *backupwrap.MysqlBackup
+	backup  *backupwrap.Wrapper
 	cluster *api.MysqlCluster
 
 	job *batch.Job
@@ -59,7 +63,7 @@ func NewJobSyncer(backup *api.MysqlBackup, cluster *api.MysqlCluster, opt *optio
 }
 
 func (s *jobSyncer) GetObject() runtime.Object { return s.job }
-func (s *jobSyncer) GetOwner() runtime.Object  { return s.backup }
+func (s *jobSyncer) GetOwner() runtime.Object  { return s.backup.MysqlBackup }
 func (s *jobSyncer) GetEventReasonForError(err error) syncer.EventReason {
 	return syncer.BasicEventReason("Job", err)
 }
@@ -68,7 +72,7 @@ func (s *jobSyncer) SyncFn(in runtime.Object) error {
 	out := in.(*batch.Job)
 
 	// check if job is already created an just update the status
-	if out.ObjectMeta.CreationTimestamp.IsZero() {
+	if !out.ObjectMeta.CreationTimestamp.IsZero() {
 		s.updateStatus(out)
 		return nil
 	}
@@ -119,9 +123,31 @@ func (s *jobSyncer) getBackupSecretName() string {
 	return s.cluster.Spec.BackupSecretName
 }
 
+// getBackupCandidate returns the hostname of the first not-lagged and
+// replicating slave node, else returns the master node.
 func (s *jobSyncer) getBackupCandidate() string {
-	// TODO: cluster.GetBackupCandidate()
-	return ""
+	wCluster := clusterwrap.NewMysqlClusterWrapper(s.cluster)
+	for _, node := range s.cluster.Status.Nodes {
+		master := wCluster.GetNodeCondition(node.Name, api.NodeConditionMaster)
+		replicating := wCluster.GetNodeCondition(node.Name, api.NodeConditionReplicating)
+		lagged := wCluster.GetNodeCondition(node.Name, api.NodeConditionLagged)
+
+		isMaster := master.Status == core.ConditionTrue
+		isReplicating := replicating != nil && replicating.Status == core.ConditionTrue
+		isLagged := lagged != nil && lagged.Status == core.ConditionTrue
+
+		if master == nil || replicating == nil || lagged == nil {
+			continue
+		}
+
+		// select a node that is not master is replicating and is not lagged
+		if !isMaster && isReplicating && !isLagged {
+			return node.Name
+		}
+	}
+	log.Info("no healthy slave node found so returns the master node", "default_node", wCluster.GetPodHostname(0),
+		"cluster", s.cluster)
+	return wCluster.GetPodHostname(0)
 }
 
 func (s *jobSyncer) ensurePodSpec(in core.PodSpec) core.PodSpec {

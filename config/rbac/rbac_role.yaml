@@ -7,7 +7,7 @@ rules:
 - apiGroups:
   - batch
   resources:
-  - job
+  - jobs
   verbs:
   - get
   - list

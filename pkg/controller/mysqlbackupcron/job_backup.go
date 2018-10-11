@@ -32,7 +32,7 @@ import (
 
 var (
 	// polling time for backup to be completed
-	backupPollingTime = time.Second
+	backupPollingTime = 5 * time.Second
 	// time to wait for a backup to be completed
 	backupWatchTimeout = time.Hour
 )
@@ -98,7 +98,7 @@ func (j job) Run() {
 			}
 
 			time.Sleep(5 * time.Second)
-			tries += 1
+			tries++
 		}
 
 		*j.BackupRunning = true
