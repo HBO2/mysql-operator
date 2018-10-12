@@ -17,10 +17,6 @@ limitations under the License.
 package syncer
 
 import (
-	"fmt"
-	"strings"
-	"time"
-
 	"github.com/presslabs/controller-util/syncer"
 	batch "k8s.io/api/batch/v1"
 	core "k8s.io/api/core/v1"
@@ -46,16 +42,16 @@ type jobSyncer struct {
 
 // NewJobSyncer returns a syncer for backup jobs
 func NewJobSyncer(backup *api.MysqlBackup, cluster *api.MysqlCluster, opt *options.Options) syncer.Interface {
-
+	wBackup := backupwrap.New(backup)
 	obj := &batch.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-backupjob", backup.Name),
+			Name:      wBackup.GetNameForJob(),
 			Namespace: backup.Namespace,
 		},
 	}
 
 	return &jobSyncer{
-		backup:  backupwrap.New(backup),
+		backup:  wBackup,
 		cluster: cluster,
 		job:     obj,
 		opt:     opt,
@@ -77,42 +73,12 @@ func (s *jobSyncer) SyncFn(in runtime.Object) error {
 		return nil
 	}
 
-	if len(s.getBackupURI()) == 0 {
-		return fmt.Errorf("backupURI not specified")
-	}
-
 	out.Labels = map[string]string{
 		"cluster": s.backup.Spec.ClusterName,
 	}
 
 	out.Spec.Template.Spec = s.ensurePodSpec(out.Spec.Template.Spec)
 	return nil
-}
-
-func (s *jobSyncer) getBackupURI() string {
-	if len(s.backup.Status.BackupURI) > 0 {
-		return s.backup.Status.BackupURI
-	}
-
-	if len(s.backup.Spec.BackupURI) > 0 {
-		return s.backup.Spec.BackupURI
-	}
-
-	if len(s.cluster.Spec.BackupURI) > 0 {
-		return getBucketURI(s.cluster.Name, s.cluster.Spec.BackupURI)
-	}
-
-	return ""
-}
-
-func getBucketURI(cluster, bucket string) string {
-	if strings.HasSuffix(bucket, "/") {
-		bucket = bucket[:len(bucket)-1]
-	}
-	t := time.Now()
-	return bucket + fmt.Sprintf(
-		"/%s-%s.xbackup.gz", cluster, t.Format("2006-01-02T15:04:05"),
-	)
 }
 
 func (s *jobSyncer) getBackupSecretName() string {
@@ -163,7 +129,7 @@ func (s *jobSyncer) ensurePodSpec(in core.PodSpec) core.PodSpec {
 	in.Containers[0].Args = []string{
 		"take-backup-to",
 		s.getBackupCandidate(),
-		s.getBackupURI(),
+		s.backup.GetBackupURI(s.cluster),
 	}
 
 	boolTrue := true

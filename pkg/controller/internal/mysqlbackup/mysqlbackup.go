@@ -17,9 +17,19 @@ limitations under the License.
 package mysqlbackup
 
 import (
+	"fmt"
+	"strings"
+	"time"
+
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 
 	api "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
+)
+
+const (
+	// BackupSuffix is the file extension that will be uploaded into storage
+	// provider
+	BackupSuffix = "xbackup.gz"
 )
 
 var log = logf.Log.WithName("update-status")
@@ -34,4 +44,32 @@ func New(backup *api.MysqlBackup) *Wrapper {
 	return &Wrapper{
 		MysqlBackup: backup,
 	}
+}
+
+// GetNameForJob returns the name of the job
+func (w *Wrapper) GetNameForJob() string {
+	return fmt.Sprintf("%s-bjob", w.Name)
+}
+
+// GetBackupURI returns a backup URI
+func (w *Wrapper) GetBackupURI(cluster *api.MysqlCluster) string {
+	if strings.HasSuffix(w.Spec.BackupURI, BackupSuffix) {
+		return w.Spec.BackupURI
+	}
+
+	if len(w.Spec.BackupURI) > 0 {
+		return w.composeBackupURI(w.Spec.BackupURI)
+	}
+
+	return w.composeBackupURI(cluster.Spec.BackupURI)
+}
+
+func (w *Wrapper) composeBackupURI(base string) string {
+	if strings.HasSuffix(base, "/") {
+		base = base[:len(base)-1]
+	}
+
+	timestamp := time.Now().Format("2006-01-02T15:04:05")
+	fileName := fmt.Sprintf("/%s-%s.%s", w.Spec.ClusterName, timestamp, BackupSuffix)
+	return base + fileName
 }

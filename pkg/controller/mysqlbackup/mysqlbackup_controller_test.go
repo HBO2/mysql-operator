@@ -26,7 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"golang.org/x/net/context"
-	corev1 "k8s.io/api/core/v1"
+	batch "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	api "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
+	backupwrap "github.com/presslabs/mysql-operator/pkg/controller/internal/mysqlbackup"
 )
 
 const timeout = time.Second * 2
@@ -65,43 +66,48 @@ var _ = Describe("MysqlBackup controller", func() {
 		close(stop)
 	})
 
-	Describe("when creating a new mysql cluster", func() {
+	Describe("when creating a new mysql backup", func() {
 		var (
 			expectedRequest reconcile.Request
 			cluster         *api.MysqlCluster
-			secret          *corev1.Secret
+			backup          *api.MysqlBackup
+			wBackup         *backupwrap.Wrapper
+			backupKey       types.NamespacedName
 		)
 
 		BeforeEach(func() {
-			name := fmt.Sprintf("cluster-%d", rand.Int31())
+			clusterName := fmt.Sprintf("cluster-%d", rand.Int31())
+			name := fmt.Sprintf("backup-%d", rand.Int31())
 			ns := "default"
 
+			backupKey = types.NamespacedName{Name: name, Namespace: ns}
 			expectedRequest = reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: name, Namespace: ns},
-			}
-
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: "the-secret", Namespace: ns},
-				StringData: map[string]string{
-					"ROOT_PASSWORD": "this-is-secret",
-				},
+				NamespacedName: backupKey,
 			}
 
 			cluster = &api.MysqlCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
 				Spec: api.MysqlClusterSpec{
 					Replicas:   2,
-					SecretName: secret.Name,
+					SecretName: "a-secret",
 				},
 			}
 
-			Expect(c.Create(context.TODO(), secret)).To(Succeed())
-			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
+			backup = &api.MysqlBackup{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Spec: api.MysqlBackupSpec{
+					ClusterName:      clusterName,
+					BackupURI:        "gs://bucket/",
+					BackupSecretName: "secert",
+				},
+			}
 
-			// Initial reconciliation
+			wBackup = backupwrap.New(backup)
+
+			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
+			Expect(c.Create(context.TODO(), backup)).To(Succeed())
+
 			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
-			// Reconcile triggered by components being created and status being
-			// updated
 			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
 
 			// some extra reconcile requests may appear
@@ -121,9 +127,23 @@ var _ = Describe("MysqlBackup controller", func() {
 		})
 
 		AfterEach(func() {
-			c.Delete(context.TODO(), secret)
 			c.Delete(context.TODO(), cluster)
+			c.Delete(context.TODO(), backup)
 		})
 
+		It("should create the job", func() {
+			job := &batch.Job{}
+			jobKey := types.NamespacedName{
+				Name:      wBackup.GetNameForJob(),
+				Namespace: backup.Namespace,
+			}
+			Expect(c.Get(context.TODO(), jobKey, job)).To(Succeed())
+			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("backup"))
+		})
+
+		It("should populate the defaults", func() {
+			Expect(c.Get(context.TODO(), backupKey, backup)).To(Succeed())
+			Expect(backup.Spec.BackupURI).To(ContainSubstring(backupwrap.BackupSuffix))
+		})
 	})
 })

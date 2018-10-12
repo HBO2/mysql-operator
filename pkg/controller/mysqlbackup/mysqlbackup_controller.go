@@ -19,6 +19,7 @@ package mysqlbackup
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/presslabs/controller-util/syncer"
 	batchv1 "k8s.io/api/batch/v1"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	mysqlv1alpha1 "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
+	backupwrap "github.com/presslabs/mysql-operator/pkg/controller/internal/mysqlbackup"
 	backupSyncer "github.com/presslabs/mysql-operator/pkg/controller/mysqlbackup/internal/syncer"
 	"github.com/presslabs/mysql-operator/pkg/options"
 )
@@ -115,6 +117,8 @@ func (r *ReconcileMysqlBackup) Reconcile(request reconcile.Request) (reconcile.R
 		return reconcile.Result{}, err
 	}
 
+	savedBackup := backup.DeepCopy()
+
 	if len(backup.Spec.ClusterName) == 0 {
 		return reconcile.Result{}, fmt.Errorf("cluster name is not specified")
 	}
@@ -131,16 +135,25 @@ func (r *ReconcileMysqlBackup) Reconcile(request reconcile.Request) (reconcile.R
 		return reconcile.Result{}, fmt.Errorf("cluster not found: %s", err)
 	}
 
-	defer func() {
-		if cErr := r.Status().Update(context.TODO(), backup); cErr != nil {
-			log.Error(cErr, "failed to update status for backup", "backup", backup)
-		}
-	}()
+	wBackup := backupwrap.New(backup)
+	wBackup.SetDefaults(cluster)
+
+	if len(wBackup.GetBackupURI(cluster)) == 0 {
+		log.Info("can't get bucketURI", "cluster", cluster, "backup", backup)
+		return reconcile.Result{}, fmt.Errorf("can't get bucketURI")
+	}
 
 	jobSyncer := backupSyncer.NewJobSyncer(backup, cluster, r.opt)
 	err = syncer.Sync(context.TODO(), jobSyncer, r.Client, r.scheme, r.recorder)
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+
+	// update spec
+	if !reflect.DeepEqual(savedBackup, backup) {
+		if err = r.Update(context.TODO(), backup); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
 	return reconcile.Result{}, nil
