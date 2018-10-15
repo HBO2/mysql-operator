@@ -66,44 +66,54 @@ var _ = Describe("MysqlBackup controller", func() {
 		close(stop)
 	})
 
-	Describe("when creating a new mysql backup", func() {
-		var (
-			expectedRequest reconcile.Request
-			cluster         *api.MysqlCluster
-			backup          *api.MysqlBackup
-			wBackup         *backupwrap.Wrapper
-			backupKey       types.NamespacedName
-		)
+	// instanciate a cluster and a backup
+	var (
+		expectedRequest reconcile.Request
+		cluster         *api.MysqlCluster
+		backup          *api.MysqlBackup
+		wBackup         *backupwrap.Wrapper
+		backupKey       types.NamespacedName
+		jobKey          types.NamespacedName
+	)
+
+	BeforeEach(func() {
+		clusterName := fmt.Sprintf("cluster-%d", rand.Int31())
+		name := fmt.Sprintf("backup-%d", rand.Int31())
+		ns := "default"
+
+		backupKey = types.NamespacedName{Name: name, Namespace: ns}
+		expectedRequest = reconcile.Request{
+			NamespacedName: backupKey,
+		}
+
+		cluster = &api.MysqlCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+			Spec: api.MysqlClusterSpec{
+				Replicas:   2,
+				SecretName: "a-secret",
+			},
+		}
+
+		backup = &api.MysqlBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: api.MysqlBackupSpec{
+				ClusterName:      clusterName,
+				BackupURI:        "gs://bucket/",
+				BackupSecretName: "secert",
+			},
+		}
+
+		wBackup = backupwrap.New(backup)
+		jobKey = types.NamespacedName{
+			Name:      wBackup.GetNameForJob(),
+			Namespace: backup.Namespace,
+		}
+	})
+
+	When("a new mysql backup is created", func() {
 
 		BeforeEach(func() {
-			clusterName := fmt.Sprintf("cluster-%d", rand.Int31())
-			name := fmt.Sprintf("backup-%d", rand.Int31())
-			ns := "default"
-
-			backupKey = types.NamespacedName{Name: name, Namespace: ns}
-			expectedRequest = reconcile.Request{
-				NamespacedName: backupKey,
-			}
-
-			cluster = &api.MysqlCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
-				Spec: api.MysqlClusterSpec{
-					Replicas:   2,
-					SecretName: "a-secret",
-				},
-			}
-
-			backup = &api.MysqlBackup{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-				Spec: api.MysqlBackupSpec{
-					ClusterName:      clusterName,
-					BackupURI:        "gs://bucket/",
-					BackupSecretName: "secert",
-				},
-			}
-
-			wBackup = backupwrap.New(backup)
-
+			// create a cluster and a backup
 			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
 			Expect(c.Create(context.TODO(), backup)).To(Succeed())
 
@@ -111,16 +121,7 @@ var _ = Describe("MysqlBackup controller", func() {
 			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
 
 			// some extra reconcile requests may appear
-		drain:
-			for {
-				select {
-				case <-requests:
-					continue
-				case <-time.After(100 * time.Millisecond):
-					break drain
-				}
-			}
-
+			drainChan(requests)
 			// We need to make sure that the controller does not create infinite
 			// loops
 			Consistently(requests).ShouldNot(Receive(Equal(expectedRequest)))
@@ -146,4 +147,77 @@ var _ = Describe("MysqlBackup controller", func() {
 			Expect(backup.Spec.BackupURI).To(ContainSubstring(backupwrap.BackupSuffix))
 		})
 	})
+
+	When("a backup is complete", func() {
+		BeforeEach(func() {
+			// mark backup as completed
+			backup.Status.Completed = true
+			// create a cluster and a backup
+			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
+			Expect(c.Create(context.TODO(), backup)).To(Succeed())
+
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+		})
+
+		AfterEach(func() {
+			c.Delete(context.TODO(), cluster)
+			c.Delete(context.TODO(), backup)
+		})
+
+		It("should skip creating job", func() {
+			job := &batch.Job{}
+			Expect(c.Get(context.TODO(), jobKey, job)).ToNot(Succeed())
+		})
+
+		It("should not receive more reconcile requests", func() {
+			Consistently(requests, time.Second).ShouldNot(Receive(Equal(expectedRequest)))
+		})
+	})
+
+	When("cluster name is not specified", func() {
+		BeforeEach(func() {
+			// mark backup as completed
+			backup.Spec.ClusterName = ""
+			// create a cluster and a backup
+			Expect(c.Create(context.TODO(), backup)).To(Succeed())
+			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
+
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+		})
+
+		AfterEach(func() {
+			c.Delete(context.TODO(), cluster)
+			c.Delete(context.TODO(), backup)
+		})
+
+		It("should skip creating job", func() {
+			job := &batch.Job{}
+			Expect(c.Get(context.TODO(), jobKey, job)).ToNot(Succeed())
+		})
+
+		It("should allow updating cluster name", func() {
+			// update cluster
+			backup.Spec.ClusterName = cluster.Name
+			Expect(c.Update(context.TODO(), backup)).To(Succeed())
+
+			// wait for reconcile request
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// check for job to be created
+			// NOTE: maybe check in an eventually for job to be created.
+			job := &batch.Job{}
+			Expect(c.Get(context.TODO(), jobKey, job)).To(Succeed())
+		})
+	})
 })
+
+func drainChan(requests <-chan reconcile.Request) {
+	for {
+		select {
+		case <-requests:
+			continue
+		case <-time.After(100 * time.Millisecond):
+			return
+		}
+	}
+}
