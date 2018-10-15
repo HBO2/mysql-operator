@@ -27,6 +27,7 @@ import (
 
 	"golang.org/x/net/context"
 	batch "k8s.io/api/batch/v1"
+	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +36,7 @@ import (
 
 	api "github.com/presslabs/mysql-operator/pkg/apis/mysql/v1alpha1"
 	backupwrap "github.com/presslabs/mysql-operator/pkg/controller/internal/mysqlbackup"
+	"github.com/presslabs/mysql-operator/pkg/controller/internal/testutil"
 )
 
 const timeout = time.Second * 2
@@ -121,7 +123,7 @@ var _ = Describe("MysqlBackup controller", func() {
 			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
 
 			// some extra reconcile requests may appear
-			drainChan(requests)
+			testutil.DrainChan(requests)
 			// We need to make sure that the controller does not create infinite
 			// loops
 			Consistently(requests).ShouldNot(Receive(Equal(expectedRequest)))
@@ -134,10 +136,6 @@ var _ = Describe("MysqlBackup controller", func() {
 
 		It("should create the job", func() {
 			job := &batch.Job{}
-			jobKey := types.NamespacedName{
-				Name:      wBackup.GetNameForJob(),
-				Namespace: backup.Namespace,
-			}
 			Expect(c.Get(context.TODO(), jobKey, job)).To(Succeed())
 			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("backup"))
 		})
@@ -146,6 +144,58 @@ var _ = Describe("MysqlBackup controller", func() {
 			Expect(c.Get(context.TODO(), backupKey, backup)).To(Succeed())
 			Expect(backup.Spec.BackupURI).To(ContainSubstring(backupwrap.BackupSuffix))
 		})
+
+		It("should update backup status as complete", func() {
+			// get job
+			job := &batch.Job{}
+			Expect(c.Get(context.TODO(), jobKey, job)).To(Succeed())
+
+			// update job as completed
+			job.Status.Conditions = []batch.JobCondition{
+				batch.JobCondition{
+					Type:   batch.JobComplete,
+					Status: core.ConditionTrue,
+				},
+			}
+			Expect(c.Status().Update(context.TODO(), job)).To(Succeed())
+
+			// expect reqoncile request
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// check mysql backup
+			Expect(c.Get(context.TODO(), backupKey, backup)).To(Succeed())
+			Expect(backup.Status.Conditions).To(testutil.BackupHaveCondition(api.BackupComplete, core.ConditionTrue))
+			Expect(backup.Status.Completed).To(Equal(true))
+		})
+
+		It("should update backup status as failed", func() {
+			// get job
+			job := &batch.Job{}
+			Expect(c.Get(context.TODO(), jobKey, job)).To(Succeed())
+
+			// update job as completed and failed
+			job.Status.Conditions = []batch.JobCondition{
+				batch.JobCondition{
+					Type:   batch.JobComplete,
+					Status: core.ConditionTrue,
+				},
+				batch.JobCondition{
+					Type:   batch.JobFailed,
+					Status: core.ConditionTrue,
+				},
+			}
+			Expect(c.Status().Update(context.TODO(), job)).To(Succeed())
+
+			// expect reqoncile request
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// check mysql backup
+			Expect(c.Get(context.TODO(), backupKey, backup)).To(Succeed())
+			Expect(backup.Status.Conditions).To(testutil.BackupHaveCondition(api.BackupComplete, core.ConditionTrue))
+			Expect(backup.Status.Conditions).To(testutil.BackupHaveCondition(api.BackupFailed, core.ConditionTrue))
+			Expect(backup.Status.Completed).To(Equal(true))
+		})
+
 	})
 
 	When("a backup is complete", func() {
@@ -210,14 +260,3 @@ var _ = Describe("MysqlBackup controller", func() {
 		})
 	})
 })
-
-func drainChan(requests <-chan reconcile.Request) {
-	for {
-		select {
-		case <-requests:
-			continue
-		case <-time.After(100 * time.Millisecond):
-			return
-		}
-	}
-}

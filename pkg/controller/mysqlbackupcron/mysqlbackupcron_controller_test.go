@@ -24,10 +24,11 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
+	gomegatypes "github.com/onsi/gomega/types"
 
 	cronpkg "github.com/wgliang/cron"
 	"golang.org/x/net/context"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,7 +40,7 @@ import (
 
 const timeout = time.Second * 2
 
-var _ = Describe("MysqlBackup controller", func() {
+var _ = Describe("MysqlBackupCron controller", func() {
 	var (
 		// channel for incoming reconcile requests
 		requests chan reconcile.Request
@@ -69,65 +70,78 @@ var _ = Describe("MysqlBackup controller", func() {
 		close(stop)
 	})
 
-	Describe("when creating a new mysql cluster", func() {
-		var (
-			expectedRequest reconcile.Request
-			cluster         *api.MysqlCluster
-			secret          *corev1.Secret
-		)
+	// instanciate a cluster and a backup
+	var (
+		expectedRequest reconcile.Request
+		cluster         *api.MysqlCluster
+		clusterKey      types.NamespacedName
+		err             error
+		schedule        cronpkg.Schedule
+	)
 
+	BeforeEach(func() {
+		clusterName := fmt.Sprintf("cluster-%d", rand.Int31())
+		ns := "default"
+
+		clusterKey = types.NamespacedName{Name: clusterName, Namespace: ns}
+		expectedRequest = reconcile.Request{
+			NamespacedName: clusterKey,
+		}
+
+		cluster = &api.MysqlCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+			Spec: api.MysqlClusterSpec{
+				Replicas:   2,
+				SecretName: "a-secret",
+
+				BackupSchedule:   "* * * * *",
+				BackupSecretName: "a-backup-secret",
+				BackupURI:        "gs://bucket/",
+			},
+		}
+
+		schedule, err = cronpkg.Parse(cluster.Spec.BackupSchedule)
+		Expect(err).To(Succeed())
+	})
+
+	When("a cluster with a backup scheduler is created", func() {
 		BeforeEach(func() {
-			name := fmt.Sprintf("cluster-%d", rand.Int31())
-			ns := "default"
-
-			expectedRequest = reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: name, Namespace: ns},
-			}
-
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: "the-secret", Namespace: ns},
-				StringData: map[string]string{
-					"ROOT_PASSWORD": "this-is-secret",
-				},
-			}
-
-			cluster = &api.MysqlCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-				Spec: api.MysqlClusterSpec{
-					Replicas:   2,
-					SecretName: secret.Name,
-				},
-			}
-
-			Expect(c.Create(context.TODO(), secret)).To(Succeed())
 			Expect(c.Create(context.TODO(), cluster)).To(Succeed())
 
 			// Initial reconciliation
 			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
-			// Reconcile triggered by components being created and status being
-			// updated
-			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
 
-			// some extra reconcile requests may appear
-		drain:
-			for {
-				select {
-				case <-requests:
-					continue
-				case <-time.After(100 * time.Millisecond):
-					break drain
-				}
-			}
-
-			// We need to make sure that the controller does not create infinite
-			// loops
-			Consistently(requests).ShouldNot(Receive(Equal(expectedRequest)))
+			// just when a cluster is created
+			Consistently(requests, 2*time.Second).ShouldNot(Receive(Equal(expectedRequest)))
 		})
 
 		AfterEach(func() {
-			c.Delete(context.TODO(), secret)
 			c.Delete(context.TODO(), cluster)
 		})
 
+		It("should register the cluster into cron", func() {
+			Expect(cron.Entries()).To(haveCronJob(cluster.Name, schedule))
+		})
+
+		It("should unregister if the cluster is deleted", func() {
+			c.Delete(context.TODO(), cluster)
+
+			// expect an reconcile event
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			Expect(cron.Entries()).ToNot(haveCronJob(cluster.Name, schedule))
+		})
+
+		//TODO: add test for updateing the cluster.
+
 	})
 })
+
+func haveCronJob(name string, sched cronpkg.Schedule) gomegatypes.GomegaMatcher {
+	return ContainElement(PointTo(MatchFields(IgnoreExtras, Fields{
+		"Job": MatchFields(IgnoreExtras, Fields{
+			"Name": Equal(name),
+		}),
+		"Schedule": Equal(sched),
+	})))
+}

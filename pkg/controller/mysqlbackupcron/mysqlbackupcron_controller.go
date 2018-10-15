@@ -25,6 +25,7 @@ import (
 	"github.com/wgliang/cron"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -121,7 +122,7 @@ func (r *ReconcileMysqlBackup) Reconcile(request reconcile.Request) (reconcile.R
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
 			// For additional cleanup logic use finalizers.
-			return reconcile.Result{}, nil
+			return reconcile.Result{}, r.unregisterCluster(request.NamespacedName)
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
@@ -190,6 +191,14 @@ func (r *ReconcileMysqlBackup) registerCluster(cluster *mysqlv1alpha1.MysqlClust
 		lock:                           new(sync.Mutex),
 		BackupScheduleJobsHistoryLimit: cluster.Spec.BackupScheduleJobsHistoryLimit,
 	}, cluster.Name)
+
+	return nil
+}
+
+func (r *ReconcileMysqlBackup) unregisterCluster(clusterKey types.NamespacedName) error {
+	if err := r.cron.Remove(clusterKey.Name); err != nil {
+		return err
+	}
 
 	return nil
 }
