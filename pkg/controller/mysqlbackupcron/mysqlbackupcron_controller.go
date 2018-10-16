@@ -48,7 +48,9 @@ var log = logf.Log.WithName(controllerName)
 // Add creates a new MysqlBackup Controller and adds it to the Manager with default RBAC. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
 func Add(mgr manager.Manager) error {
-	sscron := startStopCron{}
+	sscron := startStopCron{
+		Cron: cron.New(),
+	}
 	err := mgr.Add(sscron)
 	if err != nil {
 		return err
@@ -87,12 +89,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	enqueuer := handler.EnqueueRequestForObject{}
-	// Watch for changes to MysqlCluster. just for add and delete events
-	err = c.Watch(&source.Kind{Type: &mysqlv1alpha1.MysqlCluster{}}, &handler.Funcs{
-		CreateFunc: enqueuer.Create,
-		DeleteFunc: enqueuer.Delete,
-	})
+	err = c.Watch(&source.Kind{Type: &mysqlv1alpha1.MysqlCluster{}}, &handler.EnqueueRequestForObject{})
 	if err != nil {
 		return err
 	}
@@ -140,10 +137,11 @@ func (r *ReconcileMysqlBackup) Reconcile(request reconcile.Request) (reconcile.R
 
 	log.V(1).Info("register cluster in cronjob", "cluster", cluster, "schedule", schedule)
 
-	return reconcile.Result{}, r.registerCluster(cluster, schedule)
+	return reconcile.Result{}, r.updateClusterSchedule(cluster, schedule)
 }
 
-func (r *ReconcileMysqlBackup) registerCluster(cluster *mysqlv1alpha1.MysqlCluster, schedule cron.Schedule) error {
+// updateClusterSchedule creates/updates a cron job for specified cluster.
+func (r *ReconcileMysqlBackup) updateClusterSchedule(cluster *mysqlv1alpha1.MysqlCluster, schedule cron.Schedule) error {
 	r.lockJobRegister.Lock()
 	defer r.lockJobRegister.Unlock()
 
@@ -186,7 +184,7 @@ func (r *ReconcileMysqlBackup) registerCluster(cluster *mysqlv1alpha1.MysqlClust
 	r.cron.Schedule(schedule, job{
 		Name:                           cluster.Name,
 		Namespace:                      cluster.Namespace,
-		Client:                         r,
+		c:                              r.Client,
 		BackupRunning:                  new(bool),
 		lock:                           new(sync.Mutex),
 		BackupScheduleJobsHistoryLimit: cluster.Spec.BackupScheduleJobsHistoryLimit,
@@ -196,6 +194,9 @@ func (r *ReconcileMysqlBackup) registerCluster(cluster *mysqlv1alpha1.MysqlClust
 }
 
 func (r *ReconcileMysqlBackup) unregisterCluster(clusterKey types.NamespacedName) error {
+	r.lockJobRegister.Lock()
+	defer r.lockJobRegister.Unlock()
+
 	if err := r.cron.Remove(clusterKey.Name); err != nil {
 		return err
 	}

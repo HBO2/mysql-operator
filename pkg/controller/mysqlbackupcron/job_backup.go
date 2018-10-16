@@ -44,8 +44,8 @@ type job struct {
 
 	BackupRunning *bool
 
-	lock   *sync.Mutex
-	Client client.Client
+	lock *sync.Mutex
+	c    client.Client
 
 	BackupScheduleJobsHistoryLimit *int
 }
@@ -86,7 +86,7 @@ func (j job) Run() {
 					ClusterName: j.Name,
 				},
 			}
-			if err = j.Client.Create(context.TODO(), cluster); err == nil {
+			if err = j.c.Create(context.TODO(), cluster); err == nil {
 				break
 			}
 			log.V(1).Info("failed to create backup", "backup", backupName, "error", err)
@@ -116,7 +116,7 @@ func (j job) Run() {
 
 	err := wait.PollImmediate(backupPollingTime, backupWatchTimeout, func() (bool, error) {
 		backup := &api.MysqlBackup{}
-		if err := j.Client.Get(context.TODO(), backupKey, backup); err != nil {
+		if err := j.c.Get(context.TODO(), backupKey, backup); err != nil {
 			log.Info("failed to get backup", "backup", backupName, "error", err)
 			return false, nil
 		}
@@ -141,7 +141,7 @@ func (j *job) backupGC() {
 	selector := &client.ListOptions{}
 	selector = selector.InNamespace(j.Namespace).MatchingLabels(map[string]string{"recurrent": "true"})
 
-	if err = j.Client.List(context.TODO(), selector, backupsList); err != nil {
+	if err = j.c.List(context.TODO(), selector, backupsList); err != nil {
 		log.Error(err, "failed getting backups", "selector", selector)
 		return
 	}
@@ -149,7 +149,7 @@ func (j *job) backupGC() {
 	for i, backup := range backupsList.Items {
 		if i > *j.BackupScheduleJobsHistoryLimit {
 			// delete the backup
-			if err = j.Client.Delete(context.TODO(), &backup); err != nil {
+			if err = j.c.Delete(context.TODO(), &backup); err != nil {
 				log.Error(err, "failed to delete a backup", "backup", backup)
 			}
 		}

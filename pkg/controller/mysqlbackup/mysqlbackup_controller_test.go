@@ -68,7 +68,7 @@ var _ = Describe("MysqlBackup controller", func() {
 		close(stop)
 	})
 
-	// instanciate a cluster and a backup
+	// instantiate a cluster and a backup
 	var (
 		expectedRequest reconcile.Request
 		cluster         *api.MysqlCluster

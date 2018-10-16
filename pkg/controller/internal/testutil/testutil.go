@@ -19,8 +19,8 @@ package testutil
 import (
 	"time"
 
-	. "github.com/onsi/gomega"
-	. "github.com/onsi/gomega/gstruct"
+	g "github.com/onsi/gomega"
+	gs "github.com/onsi/gomega/gstruct"
 	gomegatypes "github.com/onsi/gomega/types"
 
 	core "k8s.io/api/core/v1"
@@ -48,8 +48,8 @@ func DrainChan(requests <-chan reconcile.Request) {
 // BackupHaveCondition is a helper func that returns a matcher to check for an
 // existing condition in condition list list
 func BackupHaveCondition(condType api.BackupConditionType, status core.ConditionStatus) gomegatypes.GomegaMatcher {
-	return ContainElement(MatchFields(IgnoreExtras, Fields{
-		"Type":   Equal(condType),
-		"Status": Equal(status),
+	return g.ContainElement(gs.MatchFields(gs.IgnoreExtras, gs.Fields{
+		"Type":   g.Equal(condType),
+		"Status": g.Equal(status),
 	}))
 }

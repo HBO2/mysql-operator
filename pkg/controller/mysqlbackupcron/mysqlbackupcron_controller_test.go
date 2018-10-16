@@ -70,7 +70,7 @@ var _ = Describe("MysqlBackupCron controller", func() {
 		close(stop)
 	})
 
-	// instanciate a cluster and a backup
+	// instantiate a cluster and a backup
 	var (
 		expectedRequest reconcile.Request
 		cluster         *api.MysqlCluster
@@ -132,8 +132,50 @@ var _ = Describe("MysqlBackupCron controller", func() {
 			Expect(cron.Entries()).ToNot(haveCronJob(cluster.Name, schedule))
 		})
 
-		//TODO: add test for updateing the cluster.
+		It("should update cluster backup schedule", func() {
+			// update cluster scheduler
+			cluster.Spec.BackupSchedule = "0 0 * * *"
+			newSchedule, _ := cronpkg.Parse(cluster.Spec.BackupSchedule)
+			Expect(c.Update(context.TODO(), cluster)).To(Succeed())
 
+			// expect an reconcile event
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// check cron entry for right scheduler
+			Expect(cron.Entries()).To(haveCronJob(cluster.Name, newSchedule))
+		})
+
+		It("should be just one entry for a cluster", func() {
+			// update cluster spec
+			cluster.Spec.MysqlConf = map[string]string{
+				"something": "new",
+			}
+			Expect(c.Update(context.TODO(), cluster)).To(Succeed())
+
+			// expect an reconcile event
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// check cron entry to have a single entry
+			Expect(cron.Entries()).To(HaveLen(1))
+		})
+
+		It("should update backup history limit", func() {
+			// update backup history limit
+			limit := 10
+			cluster.Spec.BackupScheduleJobsHistoryLimit = &limit
+			Expect(c.Update(context.TODO(), cluster)).To(Succeed())
+
+			// expect an reconcile event
+			Eventually(requests, timeout).Should(Receive(Equal(expectedRequest)))
+
+			// check cron entry to have a single entry
+			Expect(cron.Entries()).To(ContainElement(PointTo(MatchFields(IgnoreExtras, Fields{
+				"Job": MatchFields(IgnoreExtras, Fields{
+					"Name":                           Equal(cluster.Name),
+					"BackupScheduleJobsHistoryLimit": PointTo(Equal(limit)),
+				}),
+			}))))
+		})
 	})
 })
 
